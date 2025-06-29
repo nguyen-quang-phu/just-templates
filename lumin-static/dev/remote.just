@@ -1,5 +1,5 @@
 repo_path := "~/Code/keynold/copier-templates"
-project := "lumin-static"
+project := `basename "$(dirname "$PWD")"`
 type := "react-component"
 react_component_template_path := repo_path / project / type
 
