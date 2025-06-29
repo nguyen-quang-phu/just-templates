@@ -1,3 +1,8 @@
+repo_path := "~/Code/keynold/copier-templates"
+project := "lumin-static"
+type := "react-component"
+react_component_template_path := repo_path / project / type
+
 alias s := server
 
 server:
@@ -49,3 +54,7 @@ add-stylelint:
 
 debug:
   node --inspect node_modules/.bin/gatsby develop
+
+[positional-arguments]
+generate-component path:
+  copier copy {{react_component_template_path}} $1
