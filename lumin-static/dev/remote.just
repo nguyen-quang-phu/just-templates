@@ -31,13 +31,13 @@ build-dev:
   npx pnpm@10.9.0 build:dev
 
 start-local:
-  cp .env.local .env.development
-  cp sm.json.local sm.json
+  cp ../.env.local .env.development
+  cp ../sm.json.local sm.json
   @just s
 
 start-dev:
-  cp .env.dev .env.development
-  cp sm.json.dev sm.json
+  cp ../.env.dev .env.development
+  cp ../sm.json.dev sm.json
   @just s
 
 build-staging:
