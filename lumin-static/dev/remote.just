@@ -2,54 +2,99 @@ repo_path := "~/Code/keynold/copier-templates"
 project := `basename "$(dirname "$PWD")"`
 type := "react-component"
 react_component_template_path := repo_path / project / type
+sm_dev :="https://lumindev.cdn.prismic.io/api/v2"
+sm_local := "https://phong-local.cdn.prismic.io/api/v2"
+
+_pnpm +args:
+  npx pnpm@10.9.0 {{args}}
 
 alias s := server
 
 server:
-  npx pnpm@10.9.0 start
+  just _pnpm start
 
 sm:
-  npx pnpm@10.9.0 sm
+  just _pnpm sm
 
 sm-login:
   npx prismic-cli@latest login
 
 install:
-  npx pnpm@10.9.0 install
+  just _pnpm install
+
 
 [positional-arguments]
 add name:
-  npx pnpm@10.9.0 add $1
+  _pnpm add $1
 
 up:
   devenv up
 
-build:
-  npx pnpm@10.9.0 build
+update-env-gastby-config:
+  #!/usr/bin/env node
+  const fs = require('fs');
 
-build-dev:
-  npx pnpm@10.9.0 build:dev
+  const filePath = './gatsby-config.js';
+  const content = fs.readFileSync(filePath, 'utf8');
+
+  const updatedContent = content.replace(
+    "path: `.env.${process.env.NODE_ENV}`",
+    'path: `.env.development`'
+  );
+
+  fs.writeFileSync(filePath, updatedContent);
+
+update-sm-config default_sm new_sm:
+  #!/usr/bin/env node
+  const fs = require('fs');
+
+  const filePath = './sm.json';
+  const content = fs.readFileSync(filePath, 'utf8');
+
+  const updatedContent = content.replace(
+    `apiEndpoint": "{{default_sm}}",`,
+    `apiEndpoint": "{{new_sm}}",`,
+  );
+
+  fs.writeFileSync(filePath, updatedContent);
+
+update-sm-local:
+  just update-sm-config {{sm_dev}} {{sm_local}}
+
+_build env:
+  @just _set-env {{env}}
+  @just _pnpm build:dev
+
+_set-env env:
+  cp ../.env.{{env}} .env.development
+  @just update-sm-{{env}}
+  @just update-env-gastby-config
+
+_start env:
+  @just _set-env {{env}}
+  @just server
 
 start-local:
-  cp ../.env.local .env.development
-  cp ../sm.json.local sm.json
-  @just s
+  just _start local
 
 start-dev:
-  cp ../.env.dev .env.development
-  cp ../sm.json.dev sm.json
-  @just s
+  just _start dev
+
+
+build-local:
+  just _build local
+
+build-dev:
+  just _build dev
 
 build-staging:
-  cp .env.staging .env.development
-  @just build-dev
+  just _build staging
 
-build-production:
-  cp .env.production .env.development
-  @just build-dev
+build-prod:
+  just _build production
 
 add-stylelint:
-  npx pnpm add stylelint@latest stylelint-config-standard@latest stylelint-order@latest postcss-scss@latest stylelint-config-standard-scss@latest stylelint-config-standard@latest stylelint-scss@latest stylelint-order@latest stylelint-config-idiomatic-order@latest
+  npx pnpm add stylelint@latest stylelint-config-standard@latest stylelint-order@latest postcss-scss@latest stylelint-config-standard-scss@latest stylelint-config-standard@latest stylelint-scss@latest stylelint-config-css-modules
 
 
 debug:
