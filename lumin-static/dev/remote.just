@@ -25,7 +25,7 @@ install:
 
 [positional-arguments]
 add name:
-  _pnpm add $1
+  just _pnpm add $1
 
 up:
   devenv up
@@ -60,6 +60,12 @@ update-sm-config default_sm new_sm:
 
 update-sm-local:
   just update-sm-config {{sm_dev}} {{sm_local}}
+
+update-sm-dev:
+  just update-sm-config {{sm_local}} {{sm_dev}}
+
+update-sm-production:
+  just update-sm-config {{sm_dev}} {{sm_dev}}
 
 _build env:
   @just _set-env {{env}}
@@ -96,9 +102,14 @@ build-prod:
 add-stylelint:
   npx pnpm add stylelint@latest stylelint-config-standard@latest stylelint-order@latest postcss-scss@latest stylelint-config-standard-scss@latest stylelint-config-standard@latest stylelint-scss@latest stylelint-config-css-modules
 
+cloudflared:
+  cloudflared tunnel --url localhost:8000
 
 debug:
   node --inspect node_modules/.bin/gatsby develop
+
+link-commit-msg:
+ ln -s ~/.config/git/hooks/commit-msg .husky/commit-msg
 
 [positional-arguments]
 generate-component path:
