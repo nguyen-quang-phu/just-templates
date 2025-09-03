@@ -44,25 +44,32 @@ update-env-gastby-config:
 
   fs.writeFileSync(filePath, updatedContent);
 
-update-sm-config default_sm new_sm:
+update-sm-config newEndpoint:
   #!/usr/bin/env node
   const fs = require('fs');
 
   const filePath = './sm.json';
+
+  // Step 1: Read JSON
   const content = fs.readFileSync(filePath, 'utf8');
+  const json = JSON.parse(content);
 
-  const updatedContent = content.replace(
-    `apiEndpoint": "{{default_sm}}",`,
-    `apiEndpoint": "{{new_sm}}",`,
-  );
+  const oldEndpoint = json.apiEndpoint;
 
-  fs.writeFileSync(filePath, updatedContent);
+  // Step 2: Replace with new endpoint
+  json.apiEndpoint = '{{newEndpoint}}';
+
+  // Step 3: Save back to file
+  fs.writeFileSync(filePath, JSON.stringify(json, null, 2));
+
+  // Step 4: Print old -> new
+  console.log(`Updated apiEndpoint from ${oldEndpoint} to ${json.apiEndpoint}`);
 
 update-sm-local:
-  just update-sm-config {{sm_dev}} {{sm_local}}
+  just update-sm-config {{sm_local}}
 
 update-sm-dev:
-  just update-sm-config {{sm_local}} {{sm_dev}}
+  just update-sm-config {{sm_dev}}
 
 update-sm-production:
   just update-sm-config {{sm_dev}} {{sm_dev}}
@@ -72,13 +79,13 @@ _build env:
   @just _pnpm build:dev
 
 _set-env env:
-  cp ../.env.{{env}} .env.development
+  # cp ../.env.{{env}} .env.development
   @just update-sm-{{env}}
   @just update-env-gastby-config
 
 _start env:
-  @just _set-env {{env}}
-  @just server
+  @just update-sm-{{env}}
+  doppler run --config=dev_{{env}} -- just s
 
 start-local:
   just _start local
