@@ -3,15 +3,33 @@ project := `basename "$(dirname "$PWD")"`
 type := "react-component"
 react_component_template_path := repo_path / project / type
 sm_dev :="https://lumindev.cdn.prismic.io/api/v2"
-sm_local := "https://phong-local.cdn.prismic.io/api/v2"
+sm_local := "https://local-lumin.cdn.prismic.io/api/v2"
 
 _pnpm +args:
   npx pnpm@10.9.0 {{args}}
 
 alias s := server
 
+_debug env:
+  doppler run --config=dev_{{env}} -- node node_modules/gatsby/cli.js develop --inspect-brk
+
+debug-local:
+  just _debug local
+
+debug-dev:
+  just _debug dev
+
+debug-stag:
+  just _debug staging
+
+debug-prod:
+  just _debug production
+
 server:
   just _pnpm start
+
+serve:
+  just _pnpm serve
 
 sm:
   just _pnpm sm
@@ -50,19 +68,15 @@ update-sm-config newEndpoint:
 
   const filePath = './sm.json';
 
-  // Step 1: Read JSON
   const content = fs.readFileSync(filePath, 'utf8');
   const json = JSON.parse(content);
 
   const oldEndpoint = json.apiEndpoint;
 
-  // Step 2: Replace with new endpoint
   json.apiEndpoint = '{{newEndpoint}}';
 
-  // Step 3: Save back to file
   fs.writeFileSync(filePath, JSON.stringify(json, null, 2));
 
-  // Step 4: Print old -> new
   console.log(`Updated apiEndpoint from ${oldEndpoint} to ${json.apiEndpoint}`);
 
 update-sm-local:
@@ -71,12 +85,15 @@ update-sm-local:
 update-sm-dev:
   just update-sm-config {{sm_dev}}
 
+update-sm-staging:
+  # just update-sm-config {{sm_dev}} {{sm_dev}}
+  #
 update-sm-production:
-  just update-sm-config {{sm_dev}} {{sm_dev}}
+  # just update-sm-config {{sm_dev}} {{sm_dev}}
 
 _build env:
-  @just _set-env {{env}}
-  @just _pnpm build:dev
+  # @just _set-env {{env}}
+  doppler run --config=dev_{{env}} -- just _pnpm build:dev
 
 _set-env env:
   # cp ../.env.{{env}} .env.development
@@ -93,6 +110,11 @@ start-local:
 start-dev:
   just _start dev
 
+start-stag:
+  just _start staging
+
+start-prod:
+  just _start production
 
 build-local:
   just _build local
@@ -111,9 +133,6 @@ add-stylelint:
 
 cloudflared:
   cloudflared tunnel --url localhost:8000
-
-debug:
-  node --inspect node_modules/.bin/gatsby develop
 
 link-commit-msg:
  ln -s ~/.config/git/hooks/commit-msg .husky/commit-msg
