@@ -1,0 +1,655 @@
+# Lumin platform monorepo – just recipes
+# Usage: just [recipe]
+
+default:
+    just --list
+
+# Dependencies
+install:
+    pnpm install --no-frozen-lockfile
+    git checkout -- pnpm-lock.yaml
+
+# Build / test / lint (nx)
+build:
+    pnpm run build
+
+test:
+    pnpm run test
+
+lint:
+    pnpm run lint
+
+# Nx dependency graph
+graph:
+    pnpm run graph
+
+cloudflared port="3000":
+    cloudflared tunnel --url localhost:{{port}}
+
+run project target="dev":
+    pnpm nx run {{ project }}:{{ target }}
+  
+lumin-frontend:
+    @just run lumin-frontend
+
+no-checkout:
+    git sparse-checkout disable
+
+checkout-frontend:
+    git sparse-checkout set apps/frontend .agents .cursor .github .husky products/static tools/dotenvx-cli packages/i18n packages/fe-environment packages/platform products/form-templates products/agreement-gen packages/datadog-logger packages/lumin-kit packages/redis-client packages/shell-ui scripts packages/lumin-design-system products/pdf products/sign
+
+checkout-backend-frontend:
+    just checkout-frontend
+    git sparse-checkout add packages/lumin-proto tools/dev-cli apps/core/lumin-web-backend-2.0
+
+decrypt file:
+    dotenvx decrypt -f {{file}} -fk .env.keys --stdout
+
+test_e2e url args="":
+    cd apps/lumin-e2e/packages/lumin-playwright/lumin-growth && BASE_URL={{url}} PLAYWRIGHT_ENV=dev DOMAIN=.preview.luminpdf.com OAUTH2_PROXY="H7o1kmvaeN9Ng7PPvh7R84hGiahrPofx0E_wi2irzK1_ZKsFRYopJS5RpX3j5pvcO8BZTPgYbl8Pd7Ty-hIF2o7dHspvipMPvcBSJK-RGm5mEtWj-Te3cjOuw5LdyVANhdkgDN Z_eo6xQ10dQJpKZ5TVStuNpNGUdk7bK-NyuUJNWsGPahjF8dt-7bujsoG0tW39xvEZJCVWBH0U1htXOwKC-v515imj|1779764993|3nvfvD9EN_FIDih641pnP1WMXAcW56QxRas0cqM3Pbg=" LUMIN_CI_TOKEN="" pnpm run pw tests/specs/static/static-redirect-multilangues-pages.spec --project=chromium {{args}}
+
+
+env project key="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [ -z "{{key}}" ]; then
+		npx lumin-dotenvx decrypt -p "{{project}}"
+	else
+		npx lumin-dotenvx decrypt -p "{{project}}" | grep -i "{{key}}"
+	fi
+cherry-cards from +cards:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    source="{{from}}"
+    IFS=', ' read -ra cards <<< "{{cards}}"
+
+    grep_args=()
+    for card in "${cards[@]}"; do
+        [[ -z "$card" ]] && continue
+        grep_args+=(--grep="WO-${card}")
+    done
+
+    if [[ ${#grep_args[@]} -eq 0 ]]; then
+        echo "Usage: just cherry-cards <source-branch> 896 399 855"
+        exit 1
+    fi
+
+    if ! git rev-parse --verify "$source" &>/dev/null; then
+        echo "❌ Branch '${source}' does not exist"
+        exit 1
+    fi
+
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    mapfile -t lines < <(git log --oneline --no-merges --reverse "$source" "${grep_args[@]}")
+
+    if [[ ${#lines[@]} -eq 0 ]]; then
+        echo "❌ No commits found on ${source} matching: WO-{${cards[*]}}"
+        exit 1
+    fi
+
+    echo "📋 Found ${#lines[@]} commit(s) for WO-{${cards[*]}} on ${source} (oldest → newest):"
+    echo "   Cherry-pick onto: ${current_branch}"
+    echo ""
+
+    pick_shas=()
+    for line in "${lines[@]}"; do
+        sha="${line%% *}"
+        if git merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
+            echo "  ✓ ${line}  (already on ${current_branch})"
+        else
+            echo "    ${line}"
+            pick_shas+=("$sha")
+        fi
+    done
+    echo ""
+
+    if [[ ${#pick_shas[@]} -eq 0 ]]; then
+        echo "All commits already on ${current_branch}. Nothing to cherry-pick."
+        exit 0
+    fi
+
+    read -rp "🍒 Cherry-pick ${#pick_shas[@]} commit(s) onto ${current_branch}? [y/N] " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        git cherry-pick "${pick_shas[@]}"
+        echo "✅ Done — ${#pick_shas[@]} commit(s) cherry-picked onto ${current_branch}"
+    else
+        echo "Aborted."
+    fi
+
+
+# Fetch Linear release cards, stash changes, create release branch from staging, and cherry-pick
+# Usage: just cherry-release "0.25.0" develop-opt
+#        just cherry-release "0.25.0" develop-opt product="lumin-web-optimization"
+cherry-release version from="develop-opt" pipeline="Web Optimization Releases" product="lumin-web-optimization":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${LINEAR_API_KEY:?LINEAR_API_KEY is required}"
+
+    release_branch="release/{{product}}-{{version}}"
+
+    # 1. Stash uncommitted changes (if any)
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "📦 Stashing uncommitted changes..."
+        git stash push -m "auto-stash before cherry-release {{version}}"
+    fi
+
+    # 2. Checkout staging and pull latest
+    echo "🔄 Switching to staging..."
+    git fetch origin staging
+    if git show-ref --verify --quiet refs/heads/staging; then
+        git checkout staging
+        git pull --ff-only origin staging
+    else
+        git checkout -b staging origin/staging
+    fi
+
+    # 3. Create release branch from staging
+    if git show-ref --verify --quiet "refs/heads/${release_branch}"; then
+        echo "🌿 Branch ${release_branch} already exists, checking out..."
+        git checkout "${release_branch}"
+    else
+        echo "🌱 Creating branch ${release_branch} from staging..."
+        git checkout -b "${release_branch}"
+    fi
+
+    # 4. Fetch Linear release cards and cherry-pick
+    query='{ "query": "query Issues { issues(filter: { releases: { name: { eq: \"{{version}}\" }, pipeline: { name: { eq: \"{{pipeline}}\" } } } }) { edges { node { number } } } }" }'
+    numbers=$(curl -s -X POST https://api.linear.app/graphql \
+      -H "Content-Type: application/json" \
+      -H "Authorization: ${LINEAR_API_KEY}" \
+      -d "$query" | jq -r '.data.issues.edges[].node.number')
+
+    if [[ -z "$numbers" ]]; then
+        echo "❌ No issues found in release {{version}} (pipeline: {{pipeline}})"
+        exit 1
+    fi
+
+    echo "📋 Linear release {{version}} cards:"
+    echo "$numbers" | while read -r n; do echo "  WO-$n"; done
+    echo ""
+
+    just cherry-cards "{{from}}" $numbers
+
+# Create a commit using cursor-agent following the project commit convention (.agents/skills/commit)
+# Usage:
+#   just create-commit              # commit staged files (or auto-group unstaged)
+#   just create-commit "fix login"  # hint to guide the commit message
+create-commit hint="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    skill_file=".agents/skills/commit/SKILL.md"
+    if [[ ! -f "$skill_file" ]]; then
+        echo "❌ Commit skill not found: $skill_file"
+        exit 1
+    fi
+    skill="$(cat "$skill_file")"
+    hint="{{hint}}"
+    tmpfile="$(mktemp /tmp/create-commit-XXXXXX.txt)"
+    trap 'rm -f "$tmpfile"' EXIT
+    {
+        echo "Follow the commit skill instructions below EXACTLY to create a git commit."
+        echo ""
+        echo "=== COMMIT SKILL ==="
+        echo "$skill"
+        echo "=== END SKILL ==="
+        echo ""
+        echo "Additional instructions:"
+        echo "- You MUST follow the skill steps: check staged files, inspect diffs, determine type/scope/subject, and commit."
+        echo "- Do NOT ask for confirmation. Just commit."
+        echo "- Do NOT amend any existing commit."
+        echo "- Do NOT push after committing."
+        if [[ -n "$hint" ]]; then
+            echo ""
+            echo "User hint for this commit: $hint"
+        fi
+    } > "$tmpfile"
+    prompt="$(cat "$tmpfile")"
+    echo "🤖 Running cursor-agent to create commit..."
+    cursor-agent -p --trust --approve-mcps --output-format text "$prompt"
+
+# Review a GitHub PR and post inline comments via cursor-agent
+# Usage:
+#   just review-pr 1234
+#   just review-pr https://github.com/<org>/<repo>/pull/1234
+#   just review-pr 1234 dry_run=true
+#   just review-pr 1234 event=APPROVE
+review-pr pr event="COMMENT" dry_run="false" extra="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    pr="{{pr}}"
+    if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+        if [[ "$pr" =~ /pull/([0-9]+) ]]; then
+            pr="${BASH_REMATCH[1]}"
+        else
+            echo "Usage: just review-pr <pr_number|pr_url>"
+            exit 1
+        fi
+    fi
+
+    meta_json="$(gh pr view "$pr" --json url,title,author,baseRefName,headRefName,number)"
+    pr_url="$(echo "$meta_json" | jq -r '.url')"
+    pr_title="$(echo "$meta_json" | jq -r '.title')"
+    pr_author="$(echo "$meta_json" | jq -r '.author.login')"
+    pr_base="$(echo "$meta_json" | jq -r '.baseRefName')"
+    pr_head="$(echo "$meta_json" | jq -r '.headRefName')"
+
+    echo "🔎 PR #$pr — $pr_title"
+    echo "by: $pr_author"
+    echo "base: $pr_base  head: $pr_head"
+    echo "url: $pr_url"
+    echo ""
+
+    base_prompt="$(cat tools/pr-review-post-prompt.md)"
+    full_prompt="$base_prompt"$'\n\n'"Inputs:"$'\n'"- pr_number: $pr"$'\n'"- pr_url: $pr_url"$'\n'"- event: {{event}}"$'\n'"- dry_run: {{dry_run}}"
+    if [[ -n "{{extra}}" ]]; then
+        full_prompt="$full_prompt"$'\n'"- extra: {{extra}}"
+    fi
+
+    echo "🤖 Running cursor-agent (agent mode) to post review..."
+    cursor-agent -p --trust --approve-mcps --output-format text "$full_prompt"
+
+# Create a feature branch from origin/develop-opt using Linear's suggested branch name.
+# Usage:
+#   just create-branch 820
+#   just create-branch WO-820
+#   just create-branch 820 prefix="feature/"
+#   just create-branch 820 base="develop-opt"
+create-branch card base="develop-opt" prefix="feature/" team="WO":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    : "${LINEAR_API_KEY:?LINEAR_API_KEY is required}"
+
+    card="{{card}}"
+    team="{{team}}"
+    base="{{base}}"
+    prefix="{{prefix}}"
+
+    if [[ "$card" =~ ^[0-9]+$ ]]; then
+        identifier="${team}-${card}"
+    else
+        identifier="$card"
+    fi
+
+    query="$(jq -cn --arg id "$identifier" '{
+      query: "query Issue($id: String!) { issue(id: $id) { id identifier title branchName } }",
+      variables: {id: $id}
+    }')"
+
+    resp="$(curl -s -X POST https://api.linear.app/graphql \
+      -H "Content-Type: application/json" \
+      -H "Authorization: ${LINEAR_API_KEY}" \
+      -d "$query")"
+
+    linear_id="$(echo "$resp" | jq -r '.data.issue.identifier // empty')"
+    title="$(echo "$resp" | jq -r '.data.issue.title // empty')"
+    branch_name="$(echo "$resp" | jq -r '.data.issue.branchName // empty')"
+
+    if [[ -z "$linear_id" ]]; then
+        msg="$(echo "$resp" | jq -r '.errors[0].message // empty')"
+        echo "❌ Could not find Linear issue: ${identifier}"
+        [[ -n "$msg" ]] && echo "   ${msg}"
+        exit 1
+    fi
+
+    if [[ -z "$branch_name" ]]; then
+        slug="$(echo "$title" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//')"
+        branch_name="$(echo "$linear_id" | tr '[:upper:]' '[:lower:]')-${slug}"
+    fi
+
+    branch="${branch_name}"
+    branch="$(echo "$branch" | tr '[:upper:]' '[:lower:]' | tr -s '/')"
+
+    echo "🎫 Linear: ${linear_id} — ${title}"
+    echo "🌿 Base: origin/${base}"
+    echo "🌱 Branch: ${branch}"
+
+    git fetch origin "${base}"
+    if git show-ref --verify --quiet "refs/heads/${base}"; then
+        git checkout "${base}"
+        git pull --ff-only origin "${base}"
+    fi
+    if git show-ref --verify --quiet "refs/heads/${branch}"; then
+        git checkout "${branch}"
+    else
+        git checkout -b "${branch}" "origin/${base}"
+    fi
+
+# Open/update draft PR. Base `staging`: version from branch name, Linear release URL via API (same as cherry-release), then cursor-agent + PR-TEMPLATE.md.
+create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="develop-opt":
+    #!/usr/bin/env node
+    const { execSync, execFileSync } = require("child_process");
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+
+    const BASE = "{{branch}}";
+    const RELEASE_PIPELINE = "{{pipeline}}";
+    const RELEASE_SOURCE_BRANCH = "{{source}}";
+    const REVIEWERS = "khanhNguyenLuminPdf,longhn-lumin,EdwardTran99";
+    const LABEL = "dev-0ptimazation";
+    const STAGING_PR_TEMPLATE = "/Users/dev/Downloads/PR-TEMPLATE.md";
+    const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
+    if (!LINEAR_API_KEY) {
+        throw new Error("LINEAR_API_KEY is required");
+    }
+
+    function run(cmd) {
+        return execSync(cmd, { encoding: "utf-8", stdio: ["inherit", "pipe", "inherit"] }).trim();
+    }
+
+    const CURSOR_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
+
+    /** No shell — prompt is argv. stdin must be ignored or agent hangs waiting for TTY input. */
+    function runCursorAgent(prompt, label = "PR description") {
+        console.error(`⏳ Generating ${label} with cursor-agent (often 30s–3min, no output until done)...`);
+        const started = Date.now();
+        try {
+            const out = execFileSync(
+                "cursor-agent",
+                [
+                    "-p",
+                    "--trust",
+                    "--approve-mcps",
+                    "--mode",
+                    "ask",
+                    "--output-format",
+                    "text",
+                    prompt,
+                ],
+                {
+                    encoding: "utf-8",
+                    stdio: ["ignore", "pipe", "inherit"],
+                    timeout: CURSOR_AGENT_TIMEOUT_MS,
+                    maxBuffer: 16 * 1024 * 1024,
+                },
+            ).trim();
+            console.error(`✓ ${label} ready (${Math.round((Date.now() - started) / 1000)}s)`);
+            return out;
+        } catch (err) {
+            if (err.killed || err.signal === "SIGTERM") {
+                console.error(`❌ cursor-agent timed out after ${CURSOR_AGENT_TIMEOUT_MS / 60000} minutes`);
+            }
+            throw err;
+        }
+    }
+
+    function pushBranch() {
+        const branch = run("git rev-parse --abbrev-ref HEAD");
+        run(`git push -u origin "${branch}"`);
+        return branch;
+    }
+
+    function findOpenPr(branch) {
+        return run(`gh pr list --head "${branch}" --state open --json url --jq ".[].url"`);
+    }
+
+    function getCachePath(branch) {
+        const cacheDir = path.join(os.tmpdir(), "just-create-pr");
+        if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+        const safeBranch = branch.replace(/\//g, "_");
+        const safeBase = BASE.replace(/\//g, "_");
+        return path.join(cacheDir, `${safeBranch}__base_${safeBase}.json`);
+    }
+
+    function readCache(cacheFile) {
+        return fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, "utf-8")) : null;
+    }
+
+    function loadStagingTemplate() {
+        if (!fs.existsSync(STAGING_PR_TEMPLATE)) {
+            console.error(`❌ PR template not found: ${STAGING_PR_TEMPLATE}`);
+            process.exit(1);
+        }
+        return fs.readFileSync(STAGING_PR_TEMPLATE, "utf-8");
+    }
+
+    function linearGraphql(query, variables = {}) {
+        const payload = JSON.stringify({ query, variables });
+        const raw = execFileSync(
+            "curl",
+            [
+                "-sS",
+                "-X",
+                "POST",
+                "https://api.linear.app/graphql",
+                "-H",
+                "Content-Type: application/json",
+                "-H",
+                `Authorization: ${LINEAR_API_KEY}`,
+                "-d",
+                payload,
+            ],
+            { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+        );
+        const json = JSON.parse(raw);
+        if (json.errors?.length) {
+            throw new Error(json.errors.map((e) => e.message).join("; "));
+        }
+        return json.data;
+    }
+
+    function parseReleaseVersionFromBranch(branch) {
+        const match = branch.match(/(\d+\.\d+\.\d+)\s*$/);
+        if (!match) {
+            console.error(`❌ Cannot parse release version from branch: ${branch}`);
+            console.error("   Expected e.g. release/lumin-web-optimization-0.19.0");
+            process.exit(1);
+        }
+        return match[1];
+    }
+
+    function parseProductLabelFromBranch(branch, version) {
+        const slugMatch = branch.match(/^release\/(.+)-\d+\.\d+\.\d+$/);
+        if (slugMatch) {
+            const title = slugMatch[1]
+                .split("-")
+                .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                .join(" ");
+            return `${title} v${version}`;
+        }
+        return `Lumin Web Optimization v${version}`;
+    }
+
+    /** Same issue filter as cherry-release; releases filter for the PR link URL. */
+    function fetchLinearStagingContext(version) {
+        console.error(`📡 Linear: release ${version} (${RELEASE_PIPELINE})...`);
+
+        const issuesData = linearGraphql(
+            `query Issues($version: String!, $pipeline: String!) {
+              issues(
+                filter: {
+                  releases: { name: { eq: $version }, pipeline: { name: { eq: $pipeline } } }
+                }
+              ) {
+                edges { node { number title } }
+              }
+            }`,
+            { version, pipeline: RELEASE_PIPELINE },
+        );
+
+        const releasesData = linearGraphql(
+            `query Releases($version: String!, $pipeline: String!) {
+              releases(
+                filter: {
+                  pipeline: { name: { eq: $pipeline } }
+                  name: { eq: $version }
+                }
+              ) {
+                nodes {
+                  name
+                  version
+                  url
+                  pipeline { name }
+                }
+              }
+            }`,
+            { version, pipeline: RELEASE_PIPELINE },
+        );
+
+        const release = releasesData?.releases?.nodes?.[0];
+
+        if (!release?.url) {
+            console.error(
+                `❌ No Linear release URL for version ${version} (pipeline: ${RELEASE_PIPELINE})`,
+            );
+            process.exit(1);
+        }
+
+        const issues = (issuesData?.issues?.edges ?? []).map(({ node }) => ({
+            id: `WO-${node.number}`,
+            title: node.title ?? "",
+        }));
+
+        console.error(`   Linear release: ${release.url}`);
+        console.error(`   Tickets: ${issues.length}`);
+
+        return {
+            version,
+            pipeline: RELEASE_PIPELINE,
+            linearReleaseUrl: release.url,
+            issues,
+        };
+    }
+
+    function formatLinearIssuesBlock(issues) {
+        if (!issues.length) return "(none returned from Linear for this release)";
+        return issues
+            .map((row) => `- ${row.id}: ${row.title}`)
+            .join("\n");
+    }
+
+    function applyLinearReleaseUrl(body, ctx) {
+        const linkLabel = `${ctx.version} — ${ctx.pipeline}`;
+        const line = `**Linear Release:** [${linkLabel}](${ctx.linearReleaseUrl})`;
+        if (/\*\*Linear Release:\*\*/i.test(body)) {
+            return body.replace(/\*\*Linear Release:\*\*[^\n]*/i, line);
+        }
+        const intro = /(Cherry-picked[^\n]+\n\n)/i;
+        if (intro.test(body)) {
+            return body.replace(intro, `$1${line}\n\n`);
+        }
+        return `${line}\n\n${body}`;
+    }
+
+    function generateDescription() {
+        const diff = run(`git log --oneline "${BASE}...HEAD"`);
+        const prompt = [
+            "Generate a concise GitHub PR description in markdown for the following commits.",
+            'Include a "## Summary" section with 1-3 bullet points and a "## Test plan" section with a checklist.',
+            "Output ONLY the markdown, no extra text.",
+            "",
+            diff,
+        ].join("\n");
+        console.log("Generating PR description with cursor-agent...");
+        return runCursorAgent(prompt);
+    }
+
+    function generateStagingDescription(headBranch) {
+        const version = parseReleaseVersionFromBranch(headBranch);
+        const productLabel = parseProductLabelFromBranch(headBranch, version);
+        const linear = fetchLinearStagingContext(version);
+        const template = loadStagingTemplate();
+        const commitsOneline = run(`git log --oneline "${BASE}...HEAD"`);
+        const commitCount = commitsOneline ? commitsOneline.split("\n").length : 0;
+
+        const prompt = [
+            "Write a GitHub release PR description for the Lumin platform monorepo.",
+            "",
+            "Use the following document as the format guide (Output Template, Formatting Rules, Type Classification, Notes & Warnings callouts).",
+            "Fill every placeholder with real values inferred from the context below.",
+            "Do NOT paste or echo the guide document. Do NOT include meta sections (Required Inputs, Example Invocation, etc.).",
+            "Output ONLY the finished PR description markdown ready to post on GitHub.",
+            "",
+            "--- PR template guide ---",
+            template,
+            "--- end guide ---",
+            "",
+            "Resolved release metadata (use exactly — do not guess or change the Linear URL):",
+            `- Product + version title: ${productLabel}`,
+            `- Release version: ${version}`,
+            `- Source branch: ${RELEASE_SOURCE_BRANCH}`,
+            `- Target branch (PR base): ${BASE}`,
+            `- Head branch: ${headBranch}`,
+            `- Linear pipeline: ${RELEASE_PIPELINE}`,
+            `- Linear release URL (required in **Linear Release:** link): ${linear.linearReleaseUrl}`,
+            `- Linear release link label: ${version} — ${RELEASE_PIPELINE}`,
+            "",
+            "Linear tickets in this release (from API — use for Included tickets table):",
+            formatLinearIssuesBlock(linear.issues),
+            "",
+            `Commits cherry-picked onto this branch (${commitCount}):`,
+            commitsOneline || "(no commits)",
+            "",
+            "Instructions:",
+            `- Header: ## Release ${productLabel}`,
+            `- Opening line: Cherry-picked fixes and improvements from \`${RELEASE_SOURCE_BRANCH}\` into \`${BASE}\`.`,
+            `- **Linear Release:** must be exactly: [${version} — ${RELEASE_PIPELINE}](${linear.linearReleaseUrl})`,
+            "- Build the Included tickets table: prefer Linear ticket list above; add PR numbers from commits when present.",
+            "- Map commit prefixes to Type labels per the guide (fix → Bug fix, feat → Feature, etc.).",
+            "- Link tickets: [WO-N](https://linear.app/luminpdf/issue/WO-N). Link PRs when #numbers appear in commits.",
+            "- Include Notes & Warnings callouts only when supported by context; never invent blocking open PRs.",
+        ].join("\n");
+
+        console.log(`Staging release PR ${version} (template: ${STAGING_PR_TEMPLATE})`);
+        const body = runCursorAgent(prompt, "staging release PR description");
+        return applyLinearReleaseUrl(body, linear);
+    }
+
+    function resolveDescription(branch) {
+        const headSha = run("git rev-parse HEAD");
+        const cacheFile = getCachePath(branch);
+        let cached = readCache(cacheFile);
+
+        if (!cached || cached.sha !== headSha) {
+            const body =
+                BASE === "staging"
+                    ? generateStagingDescription(branch)
+                    : generateDescription();
+            cached = { sha: headSha, body };
+            fs.writeFileSync(cacheFile, JSON.stringify(cached));
+        } else {
+            console.log("No new commits — reusing cached PR description.");
+        }
+        return cached.body;
+    }
+
+    function withBodyFile(body, fn) {
+        const bodyFile = path.join(os.tmpdir(), `pr-body-${Date.now()}.md`);
+        fs.writeFileSync(bodyFile, body);
+        try { return fn(bodyFile); }
+        finally { fs.unlinkSync(bodyFile); }
+    }
+
+    function updateExistingPr(prUrl, bodyFile) {
+        console.log(`PR already exists -> ${prUrl}`);
+        run(`gh pr edit --base "${BASE}" --add-reviewer "${REVIEWERS}" --add-label "${LABEL}" --body-file "${bodyFile}"`);
+        run(`open "${prUrl}"`);
+    }
+
+    function getPrTitle(branch) {
+        const ticket = branch.match(/[A-Z]+-\d+/i)?.[0]?.toUpperCase() ?? "";
+        const slug = branch
+            .replace(/^[^/]*\//, "")
+            .replace(/[A-Z]+-\d+-?/i, "")
+            .replace(/-+/g, " ")
+            .trim();
+        const title = slug.charAt(0).toUpperCase() + slug.slice(1);
+        return `[Draft] ${ticket ? `${ticket} ` : ""}${title}`;
+    }
+
+    function createNewPr(bodyFile, branch) {
+        const title = getPrTitle(branch);
+        const url = run(`gh pr create --base "${BASE}" --title "${title}" --reviewer "${REVIEWERS}" --label "${LABEL}" --body-file "${bodyFile}"`);
+        if (url) run(`open "${url}"`);
+    }
+
+    // --- main ---
+    console.log(`\n🚀 create-pr — base: ${BASE} | reviewers: ${REVIEWERS} | label: ${LABEL}\n`);
+    const branch = pushBranch();
+    console.log(`📌 Branch: ${branch}`);
+    const prUrl = findOpenPr(branch);
+    const body = resolveDescription(branch);
+    withBodyFile(body, (file) => prUrl ? updateExistingPr(prUrl, file) : createNewPr(file, branch));
