@@ -26,6 +26,10 @@ graph:
 cloudflared port="3000":
     cloudflared tunnel --url localhost:{{port}}
 
+hubpot-upload:
+    cd ./products/static/hubspot/hubspot-canny-integration
+
+
 run project target="dev":
     pnpm nx run {{ project }}:{{ target }}
   
