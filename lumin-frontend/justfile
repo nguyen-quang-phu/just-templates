@@ -7,7 +7,7 @@ default:
 # Dependencies
 install:
     pnpm install --no-frozen-lockfile
-    git checkout -- pnpm-lock.yaml
+    # git checkout -- pnpm-lock.yaml
 
 # Build / test / lint (nx)
 build:
@@ -139,16 +139,17 @@ cherry-release version from="develop-opt" pipeline="Web Optimization Releases" p
         git stash push -m "auto-stash before cherry-release {{version}}"
     fi
 
-    echo "🔄 Switching to develop-opt..."
+    # 2. Pull latest develop-opt first (source of cherry-picks)
+    echo "🔄 Pulling latest develop-opt..."
     git fetch origin develop-opt
     if git show-ref --verify --quiet refs/heads/develop-opt; then
         git checkout develop-opt
         git pull --ff-only origin develop-opt
     else
-        git checkout -b staging origin/develop-opt
+        git checkout -b develop-opt origin/develop-opt
     fi
 
-    # 2. Checkout staging and pull latest
+    # 3. Checkout staging and pull latest
     echo "🔄 Switching to staging..."
     git fetch origin staging
     if git show-ref --verify --quiet refs/heads/staging; then
@@ -158,7 +159,7 @@ cherry-release version from="develop-opt" pipeline="Web Optimization Releases" p
         git checkout -b staging origin/staging
     fi
 
-    # 3. Create release branch from staging
+    # 4. Create release branch from staging
     if git show-ref --verify --quiet "refs/heads/${release_branch}"; then
         echo "🌿 Branch ${release_branch} already exists, checking out..."
         git checkout "${release_branch}"
@@ -167,7 +168,7 @@ cherry-release version from="develop-opt" pipeline="Web Optimization Releases" p
         git checkout -b "${release_branch}"
     fi
 
-    # 4. Fetch Linear release cards and cherry-pick
+    # 5. Fetch Linear release cards and cherry-pick
     query='{ "query": "query Issues { issues(filter: { releases: { name: { eq: \"{{version}}\" }, pipeline: { name: { eq: \"{{pipeline}}\" } } } }) { edges { node { number } } } }" }'
     numbers=$(curl -s -X POST https://api.linear.app/graphql \
       -H "Content-Type: application/json" \
@@ -354,8 +355,6 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
         return execSync(cmd, { encoding: "utf-8", stdio: ["inherit", "pipe", "inherit"] }).trim();
     }
 
-    const CURSOR_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
-
     /** No shell — prompt is argv. stdin must be ignored or agent hangs waiting for TTY input. */
     function runCursorAgent(prompt, label = "PR description") {
         console.error(`⏳ Generating ${label} with cursor-agent (often 30s–3min, no output until done)...`);
@@ -376,7 +375,6 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
                 {
                     encoding: "utf-8",
                     stdio: ["ignore", "pipe", "inherit"],
-                    timeout: CURSOR_AGENT_TIMEOUT_MS,
                     maxBuffer: 16 * 1024 * 1024,
                 },
             ).trim();
@@ -637,9 +635,10 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
         finally { fs.unlinkSync(bodyFile); }
     }
 
-    function updateExistingPr(prUrl, bodyFile) {
+    function updateExistingPr(prUrl, bodyFile, branch) {
         console.log(`PR already exists -> ${prUrl}`);
-        run(`gh pr edit --base "${BASE}" --add-reviewer "${REVIEWERS}" --add-label "${LABEL}" --body-file "${bodyFile}"`);
+        const title = getPrTitle(branch);
+        run(`gh pr edit --base "${BASE}" --title "${title}" --add-reviewer "${REVIEWERS}" --add-label "${LABEL}" --body-file "${bodyFile}"`);
         run(`open "${prUrl}"`);
     }
 
@@ -650,7 +649,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             .replace(/[A-Z]+-\d+-?/i, "")
             .replace(/-+/g, " ")
             .trim();
-        const title = BASE === "staging" ? `${slug.charAt(0).toUpperCase() + slug.slice(1)}` : branch;
+        const title = slug.charAt(0).toUpperCase() + slug.slice(1);
         return `[Draft] ${ticket ? `${ticket} ` : ""}${title}`;
     }
 
@@ -666,4 +665,4 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
     console.log(`📌 Branch: ${branch}`);
     const prUrl = findOpenPr(branch);
     const body = resolveDescription(branch);
-    withBodyFile(body, (file) => prUrl ? updateExistingPr(prUrl, file) : createNewPr(file, branch));
+    withBodyFile(body, (file) => prUrl ? updateExistingPr(prUrl, file, branch) : createNewPr(file, branch));
