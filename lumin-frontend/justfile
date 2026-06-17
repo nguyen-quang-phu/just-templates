@@ -139,6 +139,15 @@ cherry-release version from="develop-opt" pipeline="Web Optimization Releases" p
         git stash push -m "auto-stash before cherry-release {{version}}"
     fi
 
+    echo "🔄 Switching to develop-opt..."
+    git fetch origin develop-opt
+    if git show-ref --verify --quiet refs/heads/develop-opt; then
+        git checkout develop-opt
+        git pull --ff-only origin develop-opt
+    else
+        git checkout -b staging origin/develop-opt
+    fi
+
     # 2. Checkout staging and pull latest
     echo "🔄 Switching to staging..."
     git fetch origin staging
@@ -641,7 +650,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             .replace(/[A-Z]+-\d+-?/i, "")
             .replace(/-+/g, " ")
             .trim();
-        const title = slug.charAt(0).toUpperCase() + slug.slice(1);
+        const title = BASE === "staging" ? `${slug.charAt(0).toUpperCase() + slug.slice(1)}` : branch;
         return `[Draft] ${ticket ? `${ticket} ` : ""}${title}`;
     }
 
