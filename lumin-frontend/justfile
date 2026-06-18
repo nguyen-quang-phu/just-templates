@@ -133,6 +133,10 @@ cherry-release version from="develop-opt" pipeline="Web Optimization Releases" p
 
     release_branch="release/{{product}}-{{version}}"
 
+    # 0. Disable sparse-checkout so cherry-picks can touch all files
+    echo "🧹 Disabling sparse-checkout (just no-checkout)..."
+    just no-checkout
+
     # 1. Stash uncommitted changes (if any)
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo "📦 Stashing uncommitted changes..."
