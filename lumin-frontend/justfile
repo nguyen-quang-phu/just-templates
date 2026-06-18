@@ -186,7 +186,7 @@ cherry-release version from="develop-opt" pipeline="Web Optimization Releases" p
 
     just cherry-cards "{{from}}" $numbers
 
-# Create a commit using cursor-agent following the project commit convention (.agents/skills/commit)
+# Create a commit using claude following the project commit convention (.agents/skills/commit)
 # Usage:
 #   just create-commit              # commit staged files (or auto-group unstaged)
 #   just create-commit "fix login"  # hint to guide the commit message
@@ -220,10 +220,10 @@ create-commit hint="":
         fi
     } > "$tmpfile"
     prompt="$(cat "$tmpfile")"
-    echo "🤖 Running cursor-agent to create commit..."
-    cursor-agent -p --trust --approve-mcps --output-format text "$prompt"
+    echo "🤖 Running claude to create commit..."
+    claude -p --dangerously-skip-permissions --output-format text "$prompt"
 
-# Review a GitHub PR and post inline comments via cursor-agent
+# Review a GitHub PR and post inline comments via claude
 # Usage:
 #   just review-pr 1234
 #   just review-pr https://github.com/<org>/<repo>/pull/1234
@@ -262,8 +262,8 @@ review-pr pr event="COMMENT" dry_run="false" extra="":
         full_prompt="$full_prompt"$'\n'"- extra: {{extra}}"
     fi
 
-    echo "🤖 Running cursor-agent (agent mode) to post review..."
-    cursor-agent -p --trust --approve-mcps --output-format text "$full_prompt"
+    echo "🤖 Running claude (agent mode) to post review..."
+    claude -p --dangerously-skip-permissions --output-format text "$full_prompt"
 
 # Create a feature branch from origin/develop-opt using Linear's suggested branch name.
 # Usage:
@@ -332,7 +332,7 @@ create-branch card base="develop-opt" prefix="feature/" team="WO":
         git checkout -b "${branch}" "origin/${base}"
     fi
 
-# Open/update draft PR. Base `staging`: version from branch name, Linear release URL via API (same as cherry-release), then cursor-agent + PR-TEMPLATE.md.
+# Open/update draft PR. Base `staging`: version from branch name, Linear release URL via API (same as cherry-release), then claude + PR-TEMPLATE.md.
 create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="develop-opt":
     #!/usr/bin/env node
     const { execSync, execFileSync } = require("child_process");
@@ -356,18 +356,16 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
     }
 
     /** No shell — prompt is argv. stdin must be ignored or agent hangs waiting for TTY input. */
-    function runCursorAgent(prompt, label = "PR description") {
-        console.error(`⏳ Generating ${label} with cursor-agent (often 30s–3min, no output until done)...`);
+    function runClaude(prompt, label = "PR description") {
+        console.error(`⏳ Generating ${label} with claude (often 30s–3min, no output until done)...`);
         const started = Date.now();
         try {
             const out = execFileSync(
-                "cursor-agent",
+                "claude",
                 [
                     "-p",
-                    "--trust",
-                    "--approve-mcps",
-                    "--mode",
-                    "ask",
+                    "--permission-mode",
+                    "plan",
                     "--output-format",
                     "text",
                     prompt,
@@ -382,7 +380,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             return out;
         } catch (err) {
             if (err.killed || err.signal === "SIGTERM") {
-                console.error(`❌ cursor-agent timed out after ${CURSOR_AGENT_TIMEOUT_MS / 60000} minutes`);
+                console.error("❌ claude timed out");
             }
             throw err;
         }
@@ -476,7 +474,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
                   releases: { name: { eq: $version }, pipeline: { name: { eq: $pipeline } } }
                 }
               ) {
-                edges { node { number title } }
+                edges { node { number title attachments { nodes { url } } } }
               }
             }`,
             { version, pipeline: RELEASE_PIPELINE },
@@ -510,10 +508,21 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             process.exit(1);
         }
 
-        const issues = (issuesData?.issues?.edges ?? []).map(({ node }) => ({
-            id: `WO-${node.number}`,
-            title: node.title ?? "",
-        }));
+        const PR_URL_RE = /https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i;
+        const issues = (issuesData?.issues?.edges ?? []).map(({ node }) => {
+            const prs = [
+                ...new Set(
+                    (node.attachments?.nodes ?? [])
+                        .map((a) => a.url ?? "")
+                        .filter((url) => PR_URL_RE.test(url)),
+                ),
+            ];
+            return {
+                id: `WO-${node.number}`,
+                title: node.title ?? "",
+                prs,
+            };
+        });
 
         console.error(`   Linear release: ${release.url}`);
         console.error(`   Tickets: ${issues.length}`);
@@ -529,7 +538,10 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
     function formatLinearIssuesBlock(issues) {
         if (!issues.length) return "(none returned from Linear for this release)";
         return issues
-            .map((row) => `- ${row.id}: ${row.title}`)
+            .map((row) => {
+                const prs = row.prs?.length ? ` | PRs: ${row.prs.join(", ")}` : "";
+                return `- ${row.id}: ${row.title}${prs}`;
+            })
             .join("\n");
     }
 
@@ -555,8 +567,8 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             "",
             diff,
         ].join("\n");
-        console.log("Generating PR description with cursor-agent...");
-        return runCursorAgent(prompt);
+        console.log("Generating PR description with claude...");
+        return runClaude(prompt);
     }
 
     function generateStagingDescription(headBranch) {
@@ -599,14 +611,15 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             `- Header: ## Release ${productLabel}`,
             `- Opening line: Cherry-picked fixes and improvements from \`${RELEASE_SOURCE_BRANCH}\` into \`${BASE}\`.`,
             `- **Linear Release:** must be exactly: [${version} — ${RELEASE_PIPELINE}](${linear.linearReleaseUrl})`,
-            "- Build the Included tickets table: prefer Linear ticket list above; add PR numbers from commits when present.",
+            "- Build the Included tickets table from the Linear ticket list above.",
+            "- PR(s) column: render each PR URL given after a ticket ('PRs: ...') as a compact link [#<number>](<url>); if none is given, leave the cell as —.",
             "- Map commit prefixes to Type labels per the guide (fix → Bug fix, feat → Feature, etc.).",
-            "- Link tickets: [WO-N](https://linear.app/luminpdf/issue/WO-N). Link PRs when #numbers appear in commits.",
+            "- Link tickets: [WO-N](https://linear.app/luminpdf/issue/WO-N).",
             "- Include Notes & Warnings callouts only when supported by context; never invent blocking open PRs.",
         ].join("\n");
 
         console.log(`Staging release PR ${version} (template: ${STAGING_PR_TEMPLATE})`);
-        const body = runCursorAgent(prompt, "staging release PR description");
+        const body = runClaude(prompt, "staging release PR description");
         return applyLinearReleaseUrl(body, linear);
     }
 
@@ -643,6 +656,10 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
     }
 
     function getPrTitle(branch) {
+        if (BASE === "staging") {
+            const version = parseReleaseVersionFromBranch(branch);
+            return `Release ${parseProductLabelFromBranch(branch, version)}`;
+        }
         const ticket = branch.match(/[A-Z]+-\d+/i)?.[0]?.toUpperCase() ?? "";
         const slug = branch
             .replace(/^[^/]*\//, "")
