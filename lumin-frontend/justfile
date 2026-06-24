@@ -456,7 +456,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
     }
 
     function parseProductLabelFromBranch(branch, version) {
-        const slugMatch = branch.match(/^release\/(.+)-\d+\.\d+\.\d+$/);
+        const slugMatch = branch.match(/^(?:pre-)?release\/(.+)-\d+\.\d+\.\d+$/);
         if (slugMatch) {
             const title = slugMatch[1]
                 .split("-")
