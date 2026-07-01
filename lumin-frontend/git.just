@@ -762,6 +762,8 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
         const cmsSections = CMS_LABEL_SECTIONS.map((cfg) => {
             const tickets = linear.issues.filter((i) => (i.labels ?? []).includes(cfg.label));
             if (!tickets.length) return null;
+            // Unique dev handles from this section's table — @-tagged on the last checklist line.
+            const devMentions = [...new Set(tickets.flatMap((t) => t.devs ?? []))].map((d) => `@${d}`);
             const md = [
                 cfg.heading,
                 "",
@@ -776,6 +778,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
                 "",
                 cfg.checklistLabel,
                 ...tickets.map((t) => cfg.item(t.id)),
+                ...(devMentions.length ? [`- [ ] ${devMentions.join(" ")} — please confirm the above`] : []),
             ].join("\n");
             return { label: cfg.label, tickets, md };
         }).filter(Boolean);
@@ -791,12 +794,15 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
         const noPrTickets = linear.issues
             .filter((i) => !i.prs?.length && !cmsIdSet.has(i.id))
             .map((i) => ({ ...i, dev: lastDevOptMover(i.id) }));
+        // Unique dev handles/names from the no-PR table — @-tagged on the last checklist line.
+        const noPrDevMentions = [
+            ...new Set(noPrTickets.map((t) => formatDevName(t.dev)).filter((d) => d && d !== "—")),
+        ];
         const noPrSectionMd = noPrTickets.length
             ? [
                   "### Tickets without a PR",
                   "",
                   "These release tickets have no linked GitHub PR — confirm before finalizing.",
-                  "Dev = last person who moved the card to `On Dev-Opt`.",
                   "",
                   "| Ticket | Title | Dev |",
                   "|--------|-------|-----|",
@@ -809,6 +815,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
                   ...noPrTickets.map(
                       (t) => `- [ ] ${t.id} — PR linked in Linear, or confirmed no code change needed`,
                   ),
+                  ...(noPrDevMentions.length ? [`- [ ] ${noPrDevMentions.join(" ")} — please confirm the above`] : []),
               ].join("\n")
             : "";
         if (noPrTickets.length) {
@@ -831,6 +838,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             "Fill every placeholder with real values inferred from the context below.",
             "Do NOT paste or echo the guide document. Do NOT include meta sections (Required Inputs, Example Invocation, etc.).",
             "Output ONLY the finished PR description markdown ready to post on GitHub.",
+            "Do NOT append any explanation, rationale, or 'Notes on choices' / 'Notes:' section describing what you included or omitted. Make the judgment calls silently — the PR body must contain no meta-commentary about your own decisions.",
             "",
             "--- PR template guide ---",
             template,
@@ -857,6 +865,7 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
             `- Opening line: Cherry-picked fixes and improvements from \`${RELEASE_SOURCE_BRANCH}\` into \`${BASE}\`.`,
             `- **Linear Release:** must be exactly: [${version} — ${RELEASE_PIPELINE}](${linear.linearReleaseUrl})`,
             "- Build the Included tickets table from the Linear ticket list above.",
+            "- EVERY ticket in the Linear list MUST have its own row in the Included tickets table — including tickets with no linked PR. Never omit a ticket from the table just because it has no PR or because it also appears in a section below (e.g. 'Tickets without a PR'); those sections are IN ADDITION TO the table row, not a replacement for it. For a ticket with no PR, still add the row and set its PR(s) cell to —.",
             "- PR(s) column: render each PR URL given after a ticket ('PRs: ...') as a compact link [#<number>](<url>); if none is given, leave the cell as —.",
             "- Add a final `Dev` column (last column, after Type). Fill it with the GitHub handle(s) given after a ticket ('Devs: ...'), verbatim including the leading @ so they tag the author, comma-separated; if none is given, leave the cell as —. Column order must be: Ticket | Title | PR(s) | Type | Dev.",
             "- Map commit prefixes to Type labels per the guide (fix → Bug fix, feat → Feature, etc.).",
@@ -880,7 +889,13 @@ create-pr branch="develop-opt" pipeline="Web Optimization Releases" source="deve
 
         console.log(`Staging release PR ${version} (template: ${STAGING_PR_TEMPLATE})`);
         const body = runClaude(prompt, "staging release PR description");
-        return applyLinearReleaseUrl(body, linear);
+        // Backstop: the sub-agent sometimes appends a rationale trailer despite the
+        // "output only" instruction — strip any trailing "Notes on choices:" / "Notes:" block.
+        const cleaned = body
+            .replace(/\n+#{0,4}\s*Notes on choices:[\s\S]*$/i, "")
+            .replace(/\n+#{0,4}\s*Notes:\s*\n[\s\S]*$/i, "")
+            .trimEnd();
+        return applyLinearReleaseUrl(cleaned, linear);
     }
 
     function resolveDescription(branch) {
