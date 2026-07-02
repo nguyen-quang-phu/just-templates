@@ -25,7 +25,8 @@ cherry-cards from +cards:
     fi
 
     current_branch=$(git rev-parse --abbrev-ref HEAD)
-    mapfile -t lines < <(git log --oneline --no-merges --reverse "$source" "${grep_args[@]}")
+    # -i so `WO-1070` also matches prefixed scopes like `e2e-wo-1070` / `E2E-WO-1070`.
+    mapfile -t lines < <(git log --oneline --no-merges --reverse -i "$source" "${grep_args[@]}")
 
     if [[ ${#lines[@]} -eq 0 ]]; then
         echo "❌ No commits found on ${source} matching: WO-{${cards[*]}}"
